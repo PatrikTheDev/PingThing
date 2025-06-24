@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  pingthing-monitor:
+    build: .
+    container_name: pingthing-monitor
+    restart: unless-stopped
+    command: ["bun", "start"]
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=UTC
+      - NODE_ENV=production
+      - PINGTHING_HOSTS=${PINGTHING_HOSTS:-8.8.8.8,google.com,github.com}
+      - PINGTHING_INTERVAL=${PINGTHING_INTERVAL:-60}
+      - PINGTHING_TIMEOUT=${PINGTHING_TIMEOUT:-5000}
+      - PINGTHING_RETRIES=${PINGTHING_RETRIES:-3}
+      - PINGTHING_DB_PATH=/app/data/pingthing.db
+    networks:
+      - pingthing-network
+    depends_on:
+      - pingthing-api
+
+  pingthing-api:
+    build: .
+    container_name: pingthing-api  
+    restart: unless-stopped
+    command: ["bun", "run", "api"]
+    ports:
+      - "${PINGTHING_API_PORT:-3000}:3000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=UTC
+      - NODE_ENV=production
+      - PINGTHING_API_PORT=3000
+      - PINGTHING_DB_PATH=/app/data/pingthing.db
+    networks:
+      - pingthing-network
+
+networks:
+  pingthing-network:
+    driver: bridge
+
+volumes:
+  pingthing-data:

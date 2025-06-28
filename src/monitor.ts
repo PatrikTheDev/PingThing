@@ -22,11 +22,17 @@ export class NetworkMonitor {
     }
 
     this.running = true;
-    consola.success('Starting network monitoring...');
-    consola.info(`Monitoring hosts: ${this.config.hosts.join(', ')}`);
-    consola.info(`Check interval: ${this.config.interval} seconds`);
-    consola.info(`Ping timeout: ${this.config.timeout}ms`);
-    consola.info(`Max retries: ${this.config.retries}`);
+    
+    consola.box({
+      title: '🚀 PingThing Network Monitor',
+      message: [
+        `📍 Hosts: ${this.config.hosts.join(', ')}`,
+        `⏱️  Interval: ${this.config.interval}s`,
+        `⏰ Timeout: ${this.config.timeout}ms`,
+        `🔄 Retries: ${this.config.retries}`,
+        `💾 Database: ${this.config.dbPath}`
+      ].join('\n')
+    });
 
     await this.performCheck();
 
@@ -57,16 +63,47 @@ export class NetworkMonitor {
   }
 
   private async performCheck(): Promise<void> {
-    consola.info(`Performing network check at ${new Date().toISOString()}`);
+    const timestamp = new Date().toISOString();
+    const checkId = Math.random().toString(36).substring(2, 8);
     
-    const checkPromises = this.config.hosts.map(host => this.checkHost(host));
+    consola.box({
+      title: `🔍 Network Check #${checkId}`,
+      message: `Started at ${timestamp}\nHosts: ${this.config.hosts.join(', ')}`
+    });
+    
+    const results: Array<{ host: string; success: boolean; responseTime?: number; error?: string }> = [];
+    
+    const checkPromises = this.config.hosts.map(async (host) => {
+      const result = await this.checkHost(host);
+      results.push(result);
+      return result;
+    });
+    
     await Promise.allSettled(checkPromises);
     
+    const successful = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+    const avgResponseTime = results
+      .filter(r => r.success && r.responseTime)
+      .reduce((sum, r) => sum + (r.responseTime || 0), 0) / Math.max(successful, 1);
+    
     const stats = this.database.getStatistics();
-    consola.info(`Check completed. Total incidents: ${stats.totalIncidents}, Unresolved: ${stats.unresolvedIncidents}`);
+    
+    consola.box({
+      title: `📊 Check #${checkId} Summary`,
+      message: [
+        `✅ Successful: ${successful}/${this.config.hosts.length}`,
+        `❌ Failed: ${failed}/${this.config.hosts.length}`,
+        successful > 0 ? `⚡ Avg Response: ${avgResponseTime.toFixed(2)}ms` : '',
+        `📈 Total Incidents: ${stats.totalIncidents}`,
+        `🔴 Unresolved: ${stats.unresolvedIncidents}`
+      ].filter(Boolean).join('\n')
+    });
+    
+    consola.info(''); // Add spacing
   }
 
-  private async checkHost(host: string): Promise<void> {
+  private async checkHost(host: string): Promise<{ host: string; success: boolean; responseTime?: number; error?: string }> {
     try {
       const pingResult = await pingWithRetries(
         host,
@@ -75,12 +112,16 @@ export class NetworkMonitor {
       );
 
       if (pingResult.success) {
-        consola.success(`✓ ${host} is reachable (${pingResult.responseTime?.toFixed(2)}ms)`);
+        consola.success(`  ✅ ${host.padEnd(20)} ${pingResult.responseTime?.toFixed(2).padStart(6)}ms`);
         await this.resolveExistingIncidents(host);
-        return;
+        return {
+          host,
+          success: true,
+          responseTime: pingResult.responseTime
+        };
       }
 
-      consola.warn(`✗ ${host} is unreachable: ${pingResult.error}`);
+      consola.warn(`  ❌ ${host.padEnd(20)} FAILED - ${pingResult.error}`);
       
       const tracerouteResult = await traceroute(host, this.config.timeout);
       
@@ -94,18 +135,29 @@ export class NetworkMonitor {
 
       await this.database.saveIncident(incident);
       
-      consola.error(`Network incident recorded for ${host}`);
+      consola.error(`  🚨 Incident recorded for ${host}`);
       if (tracerouteResult.success && tracerouteResult.hops.length > 0) {
         const lastReachableHop = tracerouteResult.hops
           .filter(hop => !hop.timeout && hop.ip)
           .pop();
         
         if (lastReachableHop) {
-          consola.info(`Last reachable hop: ${lastReachableHop.ip} (hop ${lastReachableHop.hop})`);
+          consola.info(`  🔄 Last reachable: ${lastReachableHop.ip} (hop ${lastReachableHop.hop})`);
         }
       }
+      
+      return {
+        host,
+        success: false,
+        error: pingResult.error
+      };
     } catch (error) {
-      consola.error(`Error checking host ${host}:`, error);
+      consola.error(`  💥 Error checking ${host}:`, error);
+      return {
+        host,
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
     }
   }
 
@@ -117,7 +169,7 @@ export class NetworkMonitor {
       if (incident.id) {
         const success = this.database.markIncidentResolved(incident.id);
         if (success) {
-          consola.success(`Resolved incident ${incident.id} for ${host}`);
+          consola.success(`  ✅ Resolved incident #${incident.id} for ${host}`);
         }
       }
     }

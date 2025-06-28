@@ -131,6 +131,35 @@ export class IncidentDatabase {
     }
   }
 
+  getLatestIncident(): NetworkIncident | null {
+    const query = `
+      SELECT * FROM incidents 
+      ORDER BY timestamp DESC 
+      LIMIT 1
+    `;
+
+    try {
+      const row = this.db.prepare(query).get() as any;
+      return row ? this.mapRowToIncident(row) : null;
+    } catch (error) {
+      consola.error('Failed to fetch latest incident:', error);
+      return null;
+    }
+  }
+
+  clearAllIncidents(): boolean {
+    const query = `DELETE FROM incidents`;
+
+    try {
+      const result = this.db.prepare(query).run();
+      consola.info(`Cleared ${result.changes} incidents from database`);
+      return true;
+    } catch (error) {
+      consola.error('Failed to clear incidents:', error);
+      return false;
+    }
+  }
+
   getStatistics(): { totalIncidents: number; unresolvedIncidents: number; hostsAffected: number } {
     try {
       const totalQuery = `SELECT COUNT(*) as count FROM incidents`;

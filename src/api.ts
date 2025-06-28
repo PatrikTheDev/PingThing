@@ -17,8 +17,8 @@ app.get('/incidents', async (request, reply) => {
     const limit = query.limit ? Number.parseInt(query.limit, 10) : 50;
     
     const incidents = query.host 
-      ? database.getIncidentsByHost(query.host, limit)
-      : database.getRecentIncidents(limit);
+      ? await database.getIncidentsByHost(query.host, limit)
+      : await database.getRecentIncidents(limit);
     
     return { incidents, count: incidents.length };
   } catch (error) {
@@ -29,7 +29,7 @@ app.get('/incidents', async (request, reply) => {
 
 app.get('/incidents/unresolved', async (request, reply) => {
   try {
-    const incidents = database.getUnresolvedIncidents();
+    const incidents = await database.getUnresolvedIncidents();
     return { incidents, count: incidents.length };
   } catch (error) {
     consola.error('Error fetching unresolved incidents:', error);
@@ -46,7 +46,7 @@ app.patch('/incidents/:id/resolve', async (request, reply) => {
       return reply.code(400).send({ error: 'Invalid incident ID' });
     }
     
-    const success = database.markIncidentResolved(id);
+    const success = await database.markIncidentResolved(id);
     
     if (success) {
       return { message: `Incident ${id} marked as resolved` };
@@ -61,7 +61,7 @@ app.patch('/incidents/:id/resolve', async (request, reply) => {
 
 app.get('/statistics', async (request, reply) => {
   try {
-    const stats = database.getStatistics();
+    const stats = await database.getStatistics();
     return stats;
   } catch (error) {
     consola.error('Error fetching statistics:', error);
@@ -71,7 +71,7 @@ app.get('/statistics', async (request, reply) => {
 
 app.get('/incidents/latest', async (request, reply) => {
   try {
-    const incident = database.getLatestIncident();
+    const incident = await database.getLatestIncident();
     return incident ? { incident } : reply.code(404).send({ error: 'No incidents found' });
   } catch (error) {
     consola.error('Error fetching latest incident:', error);
@@ -81,7 +81,7 @@ app.get('/incidents/latest', async (request, reply) => {
 
 app.delete('/incidents', async (request, reply) => {
   try {
-    const success = database.clearAllIncidents();
+    const success = await database.clearAllIncidents();
     if (success) {
       return { message: 'All incidents cleared successfully' };
     }
@@ -94,7 +94,7 @@ app.delete('/incidents', async (request, reply) => {
 
 app.get('/hosts', async (request, reply) => {
   try {
-    const incidents = database.getRecentIncidents(1000);
+    const incidents = await database.getRecentIncidents(1000);
     const hosts = [...new Set(incidents.map(i => i.host))];
     return { hosts, count: hosts.length };
   } catch (error) {

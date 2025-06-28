@@ -87,7 +87,7 @@ export class NetworkMonitor {
       .filter(r => r.success && r.responseTime)
       .reduce((sum, r) => sum + (r.responseTime || 0), 0) / Math.max(successful, 1);
     
-    const stats = this.database.getStatistics();
+    const stats = await this.database.getStatistics();
     
     consola.box({
       title: `📊 Check #${checkId} Summary`,
@@ -162,12 +162,12 @@ export class NetworkMonitor {
   }
 
   private async resolveExistingIncidents(host: string): Promise<void> {
-    const unresolvedIncidents = this.database.getIncidentsByHost(host, 10)
+    const unresolvedIncidents = (await this.database.getIncidentsByHost(host, 10))
       .filter(incident => !incident.resolved);
 
     for (const incident of unresolvedIncidents) {
       if (incident.id) {
-        const success = this.database.markIncidentResolved(incident.id);
+        const success = await this.database.markIncidentResolved(incident.id);
         if (success) {
           consola.success(`  ✅ Resolved incident #${incident.id} for ${host}`);
         }

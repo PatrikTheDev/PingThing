@@ -1,17 +1,26 @@
-import { Database } from 'bun:sqlite';
-import { consola } from 'consola';
-import type { NetworkIncident, PingResult, TracerouteResult } from './types.js';
+import { Database as BunDatabase } from "bun:sqlite";
+import { Kysely } from "kysely";
+import { BunSqliteDialect } from "kysely-bun-sqlite";
+import { consola } from "consola";
+import type { NetworkIncident, PingResult, TracerouteResult } from "./types.js";
+import type { Database, NewIncident, Incident } from "./database-schema.js";
 
 export class IncidentDatabase {
-  private db: Database;
+	private db: Kysely<Database>;
+	private bunDb: BunDatabase;
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath, { create: true });
-    this.initializeSchema();
-  }
+	constructor(dbPath: string) {
+		this.bunDb = new BunDatabase(dbPath, { create: true });
+		this.db = new Kysely<Database>({
+			dialect: new BunSqliteDialect({
+				database: this.bunDb,
+			}),
+		});
+		this.initializeSchema();
+	}
 
-  private initializeSchema(): void {
-    const createIncidentsTable = `
+	private initializeSchema(): void {
+		const createIncidentsTable = `
       CREATE TABLE IF NOT EXISTS incidents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         host TEXT NOT NULL,
@@ -27,191 +36,211 @@ export class IncidentDatabase {
       )
     `;
 
-    try {
-      this.db.exec(createIncidentsTable);
-      consola.success('Database initialized successfully');
-    } catch (error) {
-      consola.error('Failed to initialize database:', error);
-      throw error;
-    }
-  }
+		try {
+			this.bunDb.exec(createIncidentsTable);
+			consola.success("Database initialized successfully");
+		} catch (error) {
+			consola.error("Failed to initialize database:", error);
+			throw error;
+		}
+	}
 
-  async saveIncident(incident: Omit<NetworkIncident, 'id'>): Promise<number> {
-    const query = `
-      INSERT INTO incidents (
-        host, timestamp, resolved, ping_success, ping_response_time, ping_error,
-        traceroute_success, traceroute_error, traceroute_hops
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
+	async saveIncident(incident: Omit<NetworkIncident, "id">): Promise<number> {
+		const newIncident: NewIncident = {
+			host: incident.host,
+			timestamp: incident.timestamp.toISOString(),
+			resolved: incident.resolved,
+			ping_success: incident.pingResult.success,
+			ping_response_time: incident.pingResult.responseTime || null,
+			ping_error: incident.pingResult.error || null,
+			traceroute_success: incident.tracerouteResult?.success || null,
+			traceroute_error: incident.tracerouteResult?.error || null,
+			traceroute_hops: incident.tracerouteResult
+				? JSON.stringify(incident.tracerouteResult.hops)
+				: null,
+		};
 
-    const values = [
-      incident.host,
-      incident.timestamp.toISOString(),
-      incident.resolved,
-      incident.pingResult.success,
-      incident.pingResult.responseTime || null,
-      incident.pingResult.error || null,
-      incident.tracerouteResult?.success || null,
-      incident.tracerouteResult?.error || null,
-      incident.tracerouteResult ? JSON.stringify(incident.tracerouteResult.hops) : null
-    ];
+		try {
+			const result = await this.db
+				.insertInto("incidents")
+				.values(newIncident)
+				.returning("id")
+				.executeTakeFirstOrThrow();
 
-    try {
-      const result = this.db.prepare(query).run(...values);
-      consola.info(`Saved incident ${result.lastInsertRowid} for host ${incident.host}`);
-      return result.lastInsertRowid as number;
-    } catch (error) {
-      consola.error('Failed to save incident:', error);
-      throw error;
-    }
-  }
+			consola.info(`Saved incident ${result.id} for host ${incident.host}`);
+			return result.id;
+		} catch (error) {
+			consola.error("Failed to save incident:", error);
+			throw error;
+		}
+	}
 
-  getRecentIncidents(limit = 50): NetworkIncident[] {
-    const query = `
-      SELECT * FROM incidents 
-      ORDER BY timestamp DESC 
-      LIMIT ?
-    `;
+	async getRecentIncidents(limit = 50): Promise<NetworkIncident[]> {
+		try {
+			const rows = await this.db
+				.selectFrom("incidents")
+				.selectAll()
+				.orderBy("timestamp", "desc")
+				.limit(limit)
+				.execute();
 
-    try {
-      const rows = this.db.prepare(query).all(limit) as any[];
-      return rows.map(row => this.mapRowToIncident(row));
-    } catch (error) {
-      consola.error('Failed to fetch recent incidents:', error);
-      return [];
-    }
-  }
+			return rows.map((row) => this.mapRowToIncident(row));
+		} catch (error) {
+			consola.error("Failed to fetch recent incidents:", error);
+			return [];
+		}
+	}
 
-  getIncidentsByHost(host: string, limit = 20): NetworkIncident[] {
-    const query = `
-      SELECT * FROM incidents 
-      WHERE host = ? 
-      ORDER BY timestamp DESC 
-      LIMIT ?
-    `;
+	async getIncidentsByHost(
+		host: string,
+		limit = 20,
+	): Promise<NetworkIncident[]> {
+		try {
+			const rows = await this.db
+				.selectFrom("incidents")
+				.selectAll()
+				.where("host", "=", host)
+				.orderBy("timestamp", "desc")
+				.limit(limit)
+				.execute();
 
-    try {
-      const rows = this.db.prepare(query).all(host, limit) as any[];
-      return rows.map(row => this.mapRowToIncident(row));
-    } catch (error) {
-      consola.error(`Failed to fetch incidents for host ${host}:`, error);
-      return [];
-    }
-  }
+			return rows.map((row) => this.mapRowToIncident(row));
+		} catch (error) {
+			consola.error(`Failed to fetch incidents for host ${host}:`, error);
+			return [];
+		}
+	}
 
-  getUnresolvedIncidents(): NetworkIncident[] {
-    const query = `
-      SELECT * FROM incidents 
-      WHERE resolved = FALSE 
-      ORDER BY timestamp DESC
-    `;
+	async getUnresolvedIncidents(): Promise<NetworkIncident[]> {
+		try {
+			const rows = await this.db
+				.selectFrom("incidents")
+				.selectAll()
+				.where("resolved", "=", false)
+				.orderBy("timestamp", "desc")
+				.execute();
 
-    try {
-      const rows = this.db.prepare(query).all() as any[];
-      return rows.map(row => this.mapRowToIncident(row));
-    } catch (error) {
-      consola.error('Failed to fetch unresolved incidents:', error);
-      return [];
-    }
-  }
+			return rows.map((row) => this.mapRowToIncident(row));
+		} catch (error) {
+			consola.error("Failed to fetch unresolved incidents:", error);
+			return [];
+		}
+	}
 
-  markIncidentResolved(id: number): boolean {
-    const query = `UPDATE incidents SET resolved = TRUE WHERE id = ?`;
+	async markIncidentResolved(id: number): Promise<boolean> {
+		try {
+			const result = await this.db
+				.updateTable("incidents")
+				.set({ resolved: true })
+				.where("id", "=", id)
+				.execute();
 
-    try {
-      const result = this.db.prepare(query).run(id);
-      const success = result.changes > 0;
-      if (success) {
-        consola.info(`Marked incident ${id} as resolved`);
-      }
-      return success;
-    } catch (error) {
-      consola.error(`Failed to mark incident ${id} as resolved:`, error);
-      return false;
-    }
-  }
+			const success = result[0]?.numUpdatedRows
+				? result[0].numUpdatedRows > 0
+				: false;
+			if (success) {
+				consola.info(`Marked incident ${id} as resolved`);
+			}
+			return success;
+		} catch (error) {
+			consola.error(`Failed to mark incident ${id} as resolved:`, error);
+			return false;
+		}
+	}
 
-  getLatestIncident(): NetworkIncident | null {
-    const query = `
-      SELECT * FROM incidents 
-      ORDER BY timestamp DESC 
-      LIMIT 1
-    `;
+	async getLatestIncident(): Promise<NetworkIncident | null> {
+		try {
+			const row = await this.db
+				.selectFrom("incidents")
+				.selectAll()
+				.orderBy("timestamp", "desc")
+				.limit(1)
+				.executeTakeFirst();
 
-    try {
-      const row = this.db.prepare(query).get() as any;
-      return row ? this.mapRowToIncident(row) : null;
-    } catch (error) {
-      consola.error('Failed to fetch latest incident:', error);
-      return null;
-    }
-  }
+			return row ? this.mapRowToIncident(row) : null;
+		} catch (error) {
+			consola.error("Failed to fetch latest incident:", error);
+			return null;
+		}
+	}
 
-  clearAllIncidents(): boolean {
-    const query = `DELETE FROM incidents`;
+	async clearAllIncidents(): Promise<boolean> {
+		try {
+			const result = await this.db.deleteFrom("incidents").execute();
 
-    try {
-      const result = this.db.prepare(query).run();
-      consola.info(`Cleared ${result.changes} incidents from database`);
-      return true;
-    } catch (error) {
-      consola.error('Failed to clear incidents:', error);
-      return false;
-    }
-  }
+			const deletedCount = result[0]?.numDeletedRows || 0;
+			consola.info(`Cleared ${deletedCount} incidents from database`);
+			return true;
+		} catch (error) {
+			consola.error("Failed to clear incidents:", error);
+			return false;
+		}
+	}
 
-  getStatistics(): { totalIncidents: number; unresolvedIncidents: number; hostsAffected: number } {
-    try {
-      const totalQuery = `SELECT COUNT(*) as count FROM incidents`;
-      const unresolvedQuery = `SELECT COUNT(*) as count FROM incidents WHERE resolved = FALSE`;
-      const hostsQuery = `SELECT COUNT(DISTINCT host) as count FROM incidents`;
+	async getStatistics(): Promise<{
+		totalIncidents: number;
+		unresolvedIncidents: number;
+		hostsAffected: number;
+	}> {
+		try {
+			const [total, unresolved, hosts] = await Promise.all([
+				this.db
+					.selectFrom("incidents")
+					.select((eb) => eb.fn.count("id").as("count"))
+					.executeTakeFirst(),
+				this.db
+					.selectFrom("incidents")
+					.select((eb) => eb.fn.count("id").as("count"))
+					.where("resolved", "=", false)
+					.executeTakeFirst(),
+				this.db
+					.selectFrom("incidents")
+					.select((eb) => eb.fn.count("host").distinct().as("count"))
+					.executeTakeFirst(),
+			]);
 
-      const total = this.db.prepare(totalQuery).get() as { count: number };
-      const unresolved = this.db.prepare(unresolvedQuery).get() as { count: number };
-      const hosts = this.db.prepare(hostsQuery).get() as { count: number };
+			return {
+				totalIncidents: Number(total?.count || 0),
+				unresolvedIncidents: Number(unresolved?.count || 0),
+				hostsAffected: Number(hosts?.count || 0),
+			};
+		} catch (error) {
+			consola.error("Failed to fetch statistics:", error);
+			return { totalIncidents: 0, unresolvedIncidents: 0, hostsAffected: 0 };
+		}
+	}
 
-      return {
-        totalIncidents: total.count,
-        unresolvedIncidents: unresolved.count,
-        hostsAffected: hosts.count
-      };
-    } catch (error) {
-      consola.error('Failed to fetch statistics:', error);
-      return { totalIncidents: 0, unresolvedIncidents: 0, hostsAffected: 0 };
-    }
-  }
+	private mapRowToIncident(row: Incident): NetworkIncident {
+		const pingResult: PingResult = {
+			host: row.host,
+			success: Boolean(row.ping_success),
+			responseTime: row.ping_response_time || undefined,
+			timestamp: new Date(row.timestamp),
+			error: row.ping_error || undefined,
+		};
 
-  private mapRowToIncident(row: any): NetworkIncident {
-    const pingResult: PingResult = {
-      host: row.host,
-      success: Boolean(row.ping_success),
-      responseTime: row.ping_response_time || undefined,
-      timestamp: new Date(row.timestamp),
-      error: row.ping_error || undefined
-    };
+		let tracerouteResult: TracerouteResult | undefined;
+		if (row.traceroute_success !== null) {
+			tracerouteResult = {
+				host: row.host,
+				success: Boolean(row.traceroute_success),
+				timestamp: new Date(row.timestamp),
+				hops: row.traceroute_hops ? JSON.parse(row.traceroute_hops) : [],
+				error: row.traceroute_error || undefined,
+			};
+		}
 
-    let tracerouteResult: TracerouteResult | undefined;
-    if (row.traceroute_success !== null) {
-      tracerouteResult = {
-        host: row.host,
-        success: Boolean(row.traceroute_success),
-        timestamp: new Date(row.timestamp),
-        hops: row.traceroute_hops ? JSON.parse(row.traceroute_hops) : [],
-        error: row.traceroute_error || undefined
-      };
-    }
+		return {
+			id: row.id,
+			host: row.host,
+			timestamp: new Date(row.timestamp),
+			resolved: Boolean(row.resolved),
+			pingResult,
+			tracerouteResult,
+		};
+	}
 
-    return {
-      id: row.id,
-      host: row.host,
-      timestamp: new Date(row.timestamp),
-      resolved: Boolean(row.resolved),
-      pingResult,
-      tracerouteResult
-    };
-  }
-
-  close(): void {
-    this.db.close();
-  }
+	close(): void {
+		this.bunDb.close();
+	}
 }

@@ -27,13 +27,13 @@ async function generateReport(): Promise<void> {
     consola.info('📊 PingThing Network Incident Report');
     consola.info('=====================================\n');
 
-    const stats = database.getStatistics();
+    const stats = await database.getStatistics();
     consola.info('📈 Statistics:');
     consola.info(`   Total Incidents: ${stats.totalIncidents}`);
     consola.info(`   Unresolved: ${stats.unresolvedIncidents}`);
     consola.info(`   Hosts Affected: ${stats.hostsAffected}\n`);
 
-    const unresolvedIncidents = database.getUnresolvedIncidents();
+    const unresolvedIncidents = await database.getUnresolvedIncidents();
     if (unresolvedIncidents.length > 0) {
       consola.warn('🚨 Unresolved Incidents:');
       consola.warn('-----------------------');
@@ -58,7 +58,7 @@ async function generateReport(): Promise<void> {
       consola.success('✅ No unresolved incidents');
     }
 
-    const recentIncidents = database.getRecentIncidents(10);
+    const recentIncidents = await database.getRecentIncidents(10);
     if (recentIncidents.length > 0) {
       consola.info('📋 Recent Incidents (Last 10):');
       consola.info('------------------------------');
@@ -79,7 +79,7 @@ async function generateReport(): Promise<void> {
       }
     }
 
-    const hostsData = database.getRecentIncidents(1000);
+    const hostsData = await database.getRecentIncidents(1000);
     const hostStats = new Map<string, { total: number; unresolved: number }>();
     
     for (const incident of hostsData) {

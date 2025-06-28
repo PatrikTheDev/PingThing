@@ -22,6 +22,8 @@
     "arg": "^5.0.2",
     "consola": "^3.4.2",
     "fastify": "^4.29.1",
+    "kysely": "^0.28.2",
+    "kysely-bun-sqlite": "^0.4.0",
     "zod": "^3.25.67"
   },
   "devDependencies": {
